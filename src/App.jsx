@@ -582,67 +582,84 @@ export default function ThreatMusicBuilder() {
     setRegions(prev => prev.filter((_,i)=>i!==idx));
   }
 
-  async function handleExportZip() {
-    // create zip structure
-    const zip = new JSZip();
-    const root = zip.folder("customMusic");
-    const regionsFolder = root.folder("regions");
-    const soundsFolder = root.folder("sounds");
-    const songsFolder = soundsFolder.folder("songs");
-    const threatFolder = soundsFolder.folder("threatMusic");
+async function handleExportZip() {
+  const zip = new JSZip();
+  const root = zip.folder("customMusic");
+  const regionsFolder = root.folder("regions");
+  const soundsFolder = root.folder("sounds");
+  const songsFolder = soundsFolder.folder("songs");
+  const threatFolder = soundsFolder.folder("threatMusic");
 
-    // We'll dedupe audio exports by id
-    const songAdded = new Set();        // for region.music
-    const threatAdded = new Set();      // for layers / nightLayers
+  // Dedup
+  const songAdded = new Set();
+  const threatAdded = new Set();
 
-    // 1. Write region JSONs
-    regions.forEach(r => {
-      const jsonOut = {
-        name: r.name,
-        layers: r.layers.map(layerArr => layerArr.map(t => t.id)),
-        nightLayers: r.nightLayers.map(layerArr => layerArr.map(t => t.id)),
-        music: r.music.map(t => t.id),
-      };
-      const fileBase = sanitizeName(r.name) || "region";
-      regionsFolder.file(fileBase + ".json", JSON.stringify(jsonOut, null, 2));
+  // Helper to normalize a track entry that might be:
+  //   "stringName"
+  //   OR { id: "stringName", file: File }
+  function normalizeTrack(t) {
+    if (typeof t === "string") {
+      return { id: t, file: undefined };
+    }
+    return t; // already {id, file}
+  }
+
+  // 1. Write region JSONs
+  regions.forEach(r => {
+    const jsonOut = {
+      name: r.name,
+      layers: r.layers.map(layerArr =>
+        layerArr.map(t => normalizeTrack(t).id)
+      ),
+      nightLayers: r.nightLayers.map(layerArr =>
+        layerArr.map(t => normalizeTrack(t).id)
+      ),
+      music: r.music.map(t => normalizeTrack(t).id),
+    };
+
+    const fileBase = sanitizeName(r.name) || "region";
+    regionsFolder.file(fileBase + ".json", JSON.stringify(jsonOut, null, 2));
+  });
+
+  // 2. Add music tracks -> sounds/songs/
+  regions.forEach(r => {
+    r.music.forEach(tRaw => {
+      const t = normalizeTrack(tRaw);
+      if (!songAdded.has(t.id) && t.file) {
+        songAdded.add(t.id);
+        songsFolder.file(t.id + ".ogg", t.file);
+      }
     });
+  });
 
-    // 2. Collect oggs for music (songs/)
-    regions.forEach(r => {
-      r.music.forEach(track => {
-        if (!songAdded.has(track.id) && track.file) {
-          songAdded.add(track.id);
-          songsFolder.file(track.id + ".ogg", track.file);
+  // 3. Add threat layer tracks -> sounds/threatMusic/
+  regions.forEach(r => {
+    // day
+    r.layers.forEach(layerArr => {
+      layerArr.forEach(tRaw => {
+        const t = normalizeTrack(tRaw);
+        if (!threatAdded.has(t.id) && t.file) {
+          threatAdded.add(t.id);
+          threatFolder.file(t.id + ".ogg", t.file);
         }
       });
     });
-
-    // 3. Collect oggs for threat layers (threatMusic/)
-    regions.forEach(r => {
-      // day
-      r.layers.forEach(layerArr => {
-        layerArr.forEach(track => {
-          if (!threatAdded.has(track.id) && track.file) {
-            threatAdded.add(track.id);
-            threatFolder.file(track.id + ".ogg", track.file);
-          }
-        });
-      });
-      // night
-      r.nightLayers.forEach(layerArr => {
-        layerArr.forEach(track => {
-          if (!threatAdded.has(track.id) && track.file) {
-            threatAdded.add(track.id);
-            threatFolder.file(track.id + ".ogg", track.file);
-          }
-        });
+    // night
+    r.nightLayers.forEach(layerArr => {
+      layerArr.forEach(tRaw => {
+        const t = normalizeTrack(tRaw);
+        if (!threatAdded.has(t.id) && t.file) {
+          threatAdded.add(t.id);
+          threatFolder.file(t.id + ".ogg", t.file);
+        }
       });
     });
+  });
 
-    // 4. Generate and download
-    const blob = await zip.generateAsync({ type: "blob" });
-    saveAs(blob, "customMusic.zip");
-  }
+  const blob = await zip.generateAsync({ type: "blob" });
+  saveAs(blob, "customMusic.zip");
+}
+
 
   return (
     <div className="min-h-screen bg-neutral-100 text-neutral-900 p-4 md:p-8 grid gap-6">
